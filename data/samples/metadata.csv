@@ -1,0 +1,7 @@
+uid,filename,test_id,sn,test_pressure,test_mode,vl1,vl2,vl3,anomalous,anomaly_code,cumulated_throughput,cumulated_on_time,cumulated_pulses
+1,00001_001_SN01_24bars_ssf.csv,1,1,24.0,ssf,True,True,False,False,0,0.0,0.0,0.0
+13,00013_013_SN01_24bars_ramp1.csv,13,1,24.0,ramp1,True,True,False,False,0,2.390370213899099,0.6522500000000001,1104.0
+19,00019_019_SN01_24bars_random_short.csv,19,1,24.0,random_short,True,True,False,False,0,4.457029106650397,1.0593333333333335,3016.0
+1269,01269_001_SN13_24bars_ssf.csv,1,13,24.0,ssf,True,True,False,True,13.0,0.0,0.0,0.0
+1281,01281_013_SN13_24bars_ramp1.csv,13,13,24.0,ramp1,True,True,False,False,0,2.219652741442109,0.6522500000000001,1104.0
+1287,01287_019_SN13_24bars_random_short.csv,19,13,24.0,random_short,True,True,False,False,0,3.994231909580293,1.0593333333333335,3016.0

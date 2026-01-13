@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=2.0.0",
     "matplotlib>=3.6.0,<4.0.0",
     "seaborn>=0.13.0,<1.0.0",
+    "loguru>=0.7.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +27,13 @@ dev = [
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 # =============================================================================
 # RUFF CONFIGURATION
@@ -111,72 +119,62 @@ section-order = [
 convention = "numpy"
 
 # =============================================================================
-# PYRIGHT CONFIGURATION
+# PYRIGHT CONFIGURATION (Pragmatic for Lab Work)
 # =============================================================================
 
 [tool.pyright]
-# Python version and environment
 pythonVersion = "3.11"
 pythonPlatform = "All"
 venvPath = "."
 venv = "venv"
 
-# Include/exclude patterns
 include = ["."]
 exclude = [
     "**/__pycache__",
     "**/.venv",
     "**/venv",
     "**/.pytest_cache",
-    "**/node_modules",
 ]
 
-# Type checking mode
-typeCheckingMode = "basic"  # Options: "off", "basic", "standard", "strict"
+# Balanced type checking - catches real bugs without overwhelming
+typeCheckingMode = "basic"
 
-# Diagnostics settings
-reportMissingImports = true
-reportMissingTypeStubs = false
-reportUnusedImport = "warning"
-reportUnusedClass = "warning"
-reportUnusedFunction = "warning"
-reportUnusedVariable = "warning"
+# Critical errors only
+reportUndefinedVariable = "error"
+reportUnboundVariable = "error"
+
+# Actual problems as warnings
+reportMissingImports = "warning"
 reportDuplicateImport = "warning"
-reportOptionalSubscript = "warning"
-reportOptionalMemberAccess = "warning"
-reportOptionalCall = "warning"
-reportOptionalIterable = "warning"
-reportOptionalContextManager = "warning"
-reportOptionalOperand = "warning"
-reportTypedDictNotRequiredAccess = "warning"
-reportPrivateUsage = "warning"
-reportConstantRedefinition = "warning"
-reportIncompatibleMethodOverride = "warning"
-reportIncompatibleVariableOverride = "warning"
-reportInconsistentConstructor = "warning"
+reportUnusedCoroutine = "warning"
+reportGeneralTypeIssues = "warning"
+
+# Disable noisy checks for pandas/numpy heavy code
+reportOptionalSubscript = "none"
+reportOptionalMemberAccess = "none"
+reportOptionalCall = "none"
+reportOptionalIterable = "none"
+reportOptionalContextManager = "none"
+reportOptionalOperand = "none"
+
+# Disable type inference strictness (let pandas/numpy be dynamic)
 reportUnknownParameterType = "none"
 reportUnknownArgumentType = "none"
-reportUnknownLambdaType = "none"
 reportUnknownVariableType = "none"
 reportUnknownMemberType = "none"
 reportMissingTypeArgument = "none"
-reportUnnecessaryIsInstance = "warning"
-reportUnnecessaryCast = "warning"
-reportUnnecessaryComparison = "warning"
-reportAssertAlwaysTrue = "warning"
-reportSelfClsParameterName = "warning"
-reportImplicitStringConcatenation = "none"
-reportUndefinedVariable = "error"
-reportUnboundVariable = "error"
-reportInvalidStubStatement = "error"
-reportIncompleteStub = "error"
-reportUnsupportedDunderAll = "warning"
-reportUnusedCoroutine = "error"
-reportGeneralTypeIssues = "warning"
 
-# Additional settings
+# Disable unused warnings (ruff handles this better)
+reportUnusedImport = "none"
+reportUnusedClass = "none"
+reportUnusedFunction = "none"
+reportUnusedVariable = "none"
+
+# Keep inference flexible for data science work
 strictListInference = false
 strictDictionaryInference = false
 strictSetInference = false
 strictParameterNoneValue = false
+
+# Allow type: ignore comments when needed
 enableTypeIgnoreComments = true

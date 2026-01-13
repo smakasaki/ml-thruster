@@ -1,4 +1,44 @@
 /data/dataset/*
+!data/dataset/.gitkeep
+/data/processed/*
+!data/processed/.gitkeep
+
+# Generated outputs
+outputs/*
+!outputs/.gitkeep
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+
+# ML/Data Science specific
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.pth
+*.pt
+*.onnx
+*.pb
+*.tflite
+checkpoints/
+experiments/
+mlruns/
+wandb/
+.neptune/
+tensorboard_logs/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
