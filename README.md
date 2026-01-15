@@ -8,14 +8,17 @@ TODO
 thruster/
 ├── data/
 │   ├── dataset/
-│   │   ├── train/          # Training data (1268 CSV files, SN01-SN12)
-│   │   └── test/           # Test data (268 CSV files, SN13-SN15)
+│   │   ├── metadata.csv    # Dataset metadata
+│   │   ├── train/          # Training data (SN01-SN12)
+│   │   └── test/           # Test data (SN13-SN15)
 │   ├── samples/
+│   │   ├── metadata.csv    # Sample metadata
 │   │   ├── train/          # Sample training files for reference
 │   │   └── test/           # Sample test files for reference
-│   ├── metadata.csv        # Dataset metadata
+│   ├──
 ├── pyproject.toml          # Configuration file
 └── .pre-commit-config.yaml # Pre-commit hooks
+...
 ```
 
 ## Dataset
@@ -66,7 +69,40 @@ pip install -e ".[dev]"
 
 ## Usage
 
-TODO
+Run full pipeline:
+```bash
+python -m src.scripts.first_midterm
+```
+
+Run with options:
+```bash
+python -m src.scripts.first_midterm --log-file --save-cleaned-csv
+```
+
+Run interactive menu:
+```bash
+python -m src.scripts.first_midterm --interactive
+```
+
+### Command-line Arguments
+
+- `--log-file` - Enable logging to file (outputs/pipeline.log)
+- `--save-cleaned-csv` - Save individual cleaned CSV files
+- `--interactive` - Launch interactive menu
+
+### Interactive Menu
+
+**[1] Run Full Pipeline** - Complete workflow: load, clean, aggregate, statistics, visualizations
+
+**[2] Load and Clean Data** - Process metadata and time series files
+
+**[3] Generate Statistics** - Create statistical reports and tables
+
+**[4] Create Visualizations** - Generate all plots and figures
+
+**[5] Run Statistics + Visualizations** - Execute options 3 and 4
+
+**[0] Exit** - Close the application
 
 ## Development
 
