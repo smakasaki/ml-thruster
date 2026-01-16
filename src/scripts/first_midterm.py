@@ -122,7 +122,9 @@ class Pipeline:
             f"Aggregated data not found at {config.AGGREGATED_DATA_PATH}. "
             "Please run data processing first."
         )
-        raise FileNotFoundError("Aggregated data not found. Run 'Load and Clean Data' step first.")
+        raise FileNotFoundError(
+            "Aggregated data not found. Run 'Load and Clean Data' step first."
+        )
 
     def _load_and_clean_metadata(self) -> pd.DataFrame:
         logger.info("Loading and cleaning metadata")
