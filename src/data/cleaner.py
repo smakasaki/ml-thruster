@@ -11,11 +11,16 @@ DEFAULT_FILL_VALUE = 0.0
 UNKNOWN_VALUE = "unknown"
 Q1_PERCENTILE = 0.25
 Q3_PERCENTILE = 0.75
-IQR_MULTIPLIER = 3
+IQR_MULTIPLIER = 1.5
 REPORT_SEPARATOR = "=" * 50
 
 NUMERIC_DTYPES = ["int64", "float64"]
 OUTLIER_CHECK_COLUMNS = ["thrust", "mfr"]
+
+THRUST_MIN_PHYSICAL = -0.1
+THRUST_MAX_PHYSICAL = 15.0
+MFR_MIN_PHYSICAL = -10.0
+MFR_MAX_PHYSICAL = 3000.0
 
 METADATA_TYPE_MAPPING = {
     "uid": int,
@@ -44,6 +49,7 @@ class CleaningStatistics:
     missing_values_handled: int = 0
     type_corrections: int = 0
     outliers_detected: int = 0
+    physical_outliers_removed: int = 0
 
     def to_dict(self) -> dict[str, int]:
         return {
@@ -51,6 +57,7 @@ class CleaningStatistics:
             "missing_values_handled": self.missing_values_handled,
             "type_corrections": self.type_corrections,
             "outliers_detected": self.outliers_detected,
+            "physical_outliers_removed": self.physical_outliers_removed,
         }
 
 
@@ -78,12 +85,12 @@ class DataCleaner:
 
         if "timestamp" in df.columns and df["timestamp"].dtype == "object":
             df["timestamp"] = pd.to_datetime(df["timestamp"])
-            # Normalizes timestamp column from datetime objects to seconds from start
             df["timestamp"] = (df["timestamp"] - df["timestamp"].iloc[0]).dt.total_seconds()
 
         df = self._ensure_time_series_types(df)
-        df = self._handle_missing_values(df)
+        df = self._handle_missing_values_time_series(df)
         df = self._remove_duplicates(df)
+        # df = self._remove_physical_outliers(df)
         return self._log_outlier_statistics(df)
 
     def _ensure_correct_types(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -124,6 +131,27 @@ class DataCleaner:
 
         return df
 
+    def _handle_missing_values_time_series(self, df: pd.DataFrame) -> pd.DataFrame:
+        missing_before = df.isna().sum().sum()
+
+        if missing_before > 0:
+            for col in df.columns:
+                if not df[col].isna().any():
+                    continue
+
+                if col in ["thrust", "mfr"]:
+                    df[col] = df[col].interpolate(method="linear", limit_direction="both")
+                    df[col] = df[col].fillna(method="bfill")
+                    df[col] = df[col].fillna(method="ffill")
+                else:
+                    fill_value = self._get_fill_strategy(df, col)
+                    df[col] = df[col].fillna(fill_value)
+
+            self.cleaning_stats.missing_values_handled += missing_before
+            logger.debug(f"Handled {missing_before} missing values in time series")
+
+        return df
+
     def _remove_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
         row_count_before_dedup = len(df)
         df = df.drop_duplicates()
@@ -134,16 +162,45 @@ class DataCleaner:
 
         return df
 
+    def _remove_physical_outliers(self, df: pd.DataFrame) -> pd.DataFrame:
+        initial_count = len(df)
+
+        if "thrust" in df.columns:
+            thrust_mask = (df["thrust"] >= THRUST_MIN_PHYSICAL) & (
+                df["thrust"] <= THRUST_MAX_PHYSICAL
+            )
+            df = df[thrust_mask]
+
+        if "mfr" in df.columns:
+            mfr_mask = (df["mfr"] >= MFR_MIN_PHYSICAL) & (df["mfr"] <= MFR_MAX_PHYSICAL)
+            df = df[mfr_mask]
+
+        removed = initial_count - len(df)
+        if removed > 0:
+            self.cleaning_stats.physical_outliers_removed += removed
+            logger.info(f"Removed {removed} physically impossible measurements")
+
+        return df
+
     def _log_outlier_statistics(self, df: pd.DataFrame) -> pd.DataFrame:
         for col in OUTLIER_CHECK_COLUMNS:
             if col in df.columns:
                 column_series = cast(pd.Series, df[col])
                 lower_bound, upper_bound = self._calculate_iqr_bounds(column_series)
 
-                outliers = ((df[col] < lower_bound) | (df[col] > upper_bound)).sum()
-                if outliers > 0:
-                    self.cleaning_stats.outliers_detected += outliers
-                    logger.debug(f"Detected {outliers} outliers in {col}")
+                outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
+                outliers_count = outlier_mask.sum()
+
+                if outliers_count > 0:
+                    self.cleaning_stats.outliers_detected += outliers_count
+                    outlier_values = df.loc[outlier_mask, col]
+                    min_outlier = outlier_values.min()
+                    max_outlier = outlier_values.max()
+                    logger.info(
+                        f"Outliers in {col}: {outliers_count} detected "
+                        f"(range: {min_outlier:.4f} to {max_outlier:.4f}, "
+                        f"IQR bounds: [{lower_bound:.4f}, {upper_bound:.4f}])"
+                    )
 
         return df
 
@@ -213,5 +270,7 @@ class DataCleaner:
         report += f"Duplicates removed: {self.cleaning_stats.duplicates_removed}\n"
         report += f"Missing values handled: {self.cleaning_stats.missing_values_handled}\n"
         report += f"Type corrections: {self.cleaning_stats.type_corrections}\n"
-        report += f"Outliers detected: {self.cleaning_stats.outliers_detected}\n"
+        report += f"Statistical outliers detected (NOT removed): {self.cleaning_stats.outliers_detected}\n"
+        report += "\nNote: Outliers were identified but NOT removed for Midterm 1.\n"
+        report += "Decision on outlier handling will be made in Midterm 2 during modeling phase.\n"
         return report

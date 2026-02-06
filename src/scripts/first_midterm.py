@@ -38,6 +38,7 @@ class Pipeline:
             aggregates_list, successful_indices = self._process_time_series_files(metadata)
             filtered_metadata = metadata.loc[successful_indices].reset_index(drop=True)
             aggregated_df = self._create_aggregated_dataset(filtered_metadata, aggregates_list)
+
             self._save_processed_data(filtered_metadata, aggregated_df)
             self._generate_statistics(aggregated_df)
             self.visualizer.create_all_visualizations(aggregated_df)
@@ -64,6 +65,7 @@ class Pipeline:
             aggregates_list, successful_indices = self._process_time_series_files(metadata)
             filtered_metadata = metadata.loc[successful_indices].reset_index(drop=True)
             aggregated_df = self._create_aggregated_dataset(filtered_metadata, aggregates_list)
+
             self._save_processed_data(filtered_metadata, aggregated_df)
             self._save_cleaning_report()
 
@@ -195,7 +197,11 @@ class Pipeline:
         logger.info("Creating aggregated dataset")
         return self.aggregator.create_aggregated_dataset(metadata, aggregates_list)
 
-    def _save_processed_data(self, metadata: pd.DataFrame, aggregated_df: pd.DataFrame) -> None:
+    def _save_processed_data(
+        self,
+        metadata: pd.DataFrame,
+        aggregated_df: pd.DataFrame,
+    ) -> None:
         logger.info("Saving processed data")
         config.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 

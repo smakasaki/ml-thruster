@@ -1,0 +1,917 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage[hidelinks]{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{makecell}
+
+\geometry{margin=2.5cm}
+\onehalfspacing
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{white},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    rulecolor=\color{black},
+    tabsize=2,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false,
+    title=\lstname
+}
+
+\title{\textbf{Spacecraft Thruster Performance Degradation Analysis}}
+\author{
+    Griu Andrei \\
+    Mosan Alexandr \\
+    Alexei Nikita \\
+    \\
+    \textit{Technical University of Moldova}
+}
+\date{February 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report presents a machine learning approach for predicting spacecraft thruster performance degradation using time-series telemetry data. The dataset comprises 2,611 test sequences from 24 thruster units with approximately 167 million measurements across multiple operational parameters. The project consists of two phases: exploratory data analysis examining degradation patterns and correlations, followed by development of predictive models.
+
+Statistical analysis revealed moderate negative correlations between cumulative aging factors and thrust performance, strong positive correlation with inlet pressure, and substantial unit-to-unit variability that necessitates robust generalization techniques. Through systematic feature selection, we identified an optimal 18-feature subset that balances model complexity with predictive accuracy.
+
+Two regression models were developed and evaluated: Ridge regression with L2 regularization and histogram-based gradient boosting. Both models demonstrated strong generalization performance on 12 held-out test thrusters, achieving test R² exceeding 0.97 and RMSE below 0.06 N (representing approximately 13\% relative error). Ridge regression provided slightly better RMSE (0.0577 N), while gradient boosting achieved superior median absolute error (0.0257 N). Per-thruster analysis revealed consistent performance across units with some variability attributable to individual thruster characteristics. The results demonstrate that machine learning models can effectively predict thruster performance degradation patterns, with potential applications in predictive maintenance and mission planning.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+%===============================================================================
+% MIDTERM 1: DATA SCRUBBING AND EXPLORATION
+%===============================================================================
+
+\section{Introduction}
+
+Spacecraft propulsion systems rely on chemical monopropellant thrusters for attitude control and orbital maneuvering. These thrusters typically generate thrust ranging from 0.1 to 1.5 Newtons through catalytic decomposition of propellant. Understanding performance degradation over operational lifetime is critical for mission planning and spacecraft safety.
+
+This project applies machine learning techniques to analyze and predict thruster performance degradation. The objectives are:
+
+\begin{enumerate}
+    \item Understand the structure and quality of thruster test data
+    \item Identify relationships between operational parameters and performance metrics
+    \item Develop predictive models for thrust output
+    \item Compare different modeling approaches
+\end{enumerate}
+
+\section{Data Description}
+
+\subsection{Dataset Overview}
+
+The dataset consists of synthetic spacecraft thruster firing test data simulating 24 thruster units (SN01-SN24). Each unit undergoes 112 test protocols spanning acceptance, qualification, and robustness testing phases.
+
+\begin{table}[H]
+\centering
+\caption{Dataset scope and organization}
+\label{tab:dataset_scope}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Category} & \textbf{Count} & \textbf{Percentage} \\
+\midrule
+\textbf{Total Sequences} & 2,611 & 100\% \\
+\quad Training (SN01-SN12) & 1,267 & 48.5\% \\
+\quad Test (SN13-SN24) & 1,344 & 51.5\% \\
+\midrule
+\textbf{Serial Numbers} & 24 & -- \\
+\quad Complete (112 tests) & 23 & 95.8\% \\
+\quad Incomplete (SN10: 35 tests) & 1 & 4.2\% \\
+\midrule
+\textbf{Anomalous Sequences} & 269 & 10.3\% \\
+\textbf{Total Raw Measurements} & \multicolumn{2}{c}{$\approx$ 167 million} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:dataset_scope} demonstrates the scale and organization of the dataset. The nearly equal split between training (48.5\%) and test (51.5\%) data ensures robust model validation. One critical observation is that SN10 contains only 35 tests instead of the expected 112, representing incomplete testing that required special handling during analysis. The 10.3\% anomaly rate indicates that approximately 1 in 10 test sequences experienced some form of abnormal behavior, which is consistent with real-world qualification testing where failures are deliberately induced to understand thruster limits.
+
+\subsection{Raw Data Structure}
+
+Each test sequence is stored as a CSV file containing 100 Hz measurements with columns: timestamp, ton (valve command 0/1), thrust (N), mfr (mass flow rate, mg/s), vl (vapor lock indicator), and anomaly\_code.
+
+A metadata file links each sequence to operational context including test pressure (5-24 bars), test mode (8 categories), anomaly flags, and cumulative history (throughput, on-time, pulses).
+
+\section{Data Cleaning}
+
+\subsection{Cleaning Pipeline}
+
+The data cleaning process was implemented in Python using the following steps:
+
+\begin{enumerate}
+    \item \textbf{Type Corrections}: Ensured correct data types for all columns (2,611 corrections applied)
+    \item \textbf{Missing Values}: Applied linear interpolation for thrust/mfr, median imputation for other numeric columns
+    \item \textbf{Duplicate Removal}: Checked for and removed duplicate rows (0 found)
+    \item \textbf{Outlier Detection}: Identified statistical outliers using IQR method (detected but not removed)
+\end{enumerate}
+
+\subsection{Outlier Detection Strategy}
+
+Statistical outliers were identified using the Interquartile Range (IQR) method with standard multiplier of 1.5:
+
+\begin{equation}
+\text{Outlier if } x < Q_1 - 1.5 \times IQR \text{ or } x > Q_3 + 1.5 \times IQR
+\end{equation}
+
+This approach detected approximately 30.3 million outlier measurements across all time series files. These outliers were \textbf{logged but not removed} for Midterm 1. The decision on outlier handling was deferred to the modeling phase, where:
+
+\begin{itemize}
+    \item Outliers in anomalous sequences represent genuine failure modes
+    \item Outliers in normal sequences may indicate transient dynamics
+    \item Removing outliers could bias the analysis toward artificially clean data
+\end{itemize}
+
+\begin{table}[H]
+\centering
+\caption{Data cleaning summary}
+\label{tab:cleaning_summary}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Type corrections applied & 2,611 \\
+Missing values handled & 0 \\
+Duplicates removed & 0 \\
+Statistical outliers detected & 30,336,949 \\
+Physical outliers removed & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:cleaning_summary} reveals excellent data quality. The absence of missing values and duplicates indicates well-maintained test equipment and data collection procedures. The 2,611 type corrections correspond exactly to the number of test sequences, suggesting systematic type mismatches in the raw data format that were uniformly corrected. The substantial number of detected outliers (30.3 million out of 167 million measurements, or 18.2\%) represents a significant portion of the data, justifying the conservative decision to preserve them rather than risk removing legitimate transient behavior or failure signatures.
+
+\subsection{Data Quality Assessment}
+
+\begin{table}[H]
+\centering
+\caption{Data quality findings}
+\label{tab:data_quality}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Quality Metric} & \textbf{Finding} & \textbf{Status} \\
+\midrule
+Missing values & 0 (0.0\%) & OK \\
+Duplicate rows & 0 (0.0\%) & OK \\
+Negative thrust records & 24 & Investigated \\
+Negative MFR records & 1 & Investigated \\
+Anomaly rate & 10.3\% & Matches expected \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The data quality assessment in Table \ref{tab:data_quality} identifies several edge cases requiring investigation. The 24 records with negative thrust values (out of 167 million measurements, representing 0.000014\%) likely represent sensor noise near zero thrust or measurement artifacts during valve transitions. Similarly, the single negative MFR record is negligible. These rare occurrences do not warrant data removal but were flagged for monitoring during modeling. The anomaly rate of 10.3\% aligns with the dataset documentation's description of deliberate anomaly injection for testing robustness.
+
+\section{Data Aggregation}
+
+\subsection{Aggregation Rationale}
+
+The 167 million raw measurements were aggregated into summary statistics per test sequence. This approach:
+\begin{itemize}
+    \item Reduces computational complexity for exploratory analysis
+    \item Focuses on sequence-level characteristics rather than transient dynamics
+    \item Enables correlation analysis between operational parameters and performance
+\end{itemize}
+
+\subsection{Aggregated Features}
+
+For each sequence, 18 statistical features were computed from the time series data during valve-open periods (ton = 1).
+
+\begin{table}[H]
+\centering
+\caption{Aggregated features (18 total)}
+\label{tab:aggregated_features}
+\small
+\begin{tabular}{llp{6cm}}
+\toprule
+\textbf{Feature Group} & \textbf{Count} & \textbf{Features} \\
+\midrule
+Thrust statistics & 5 & mean, std, min, max, median \\
+MFR statistics & 5 & mean, std, min, max, median \\
+Temporal metrics & 4 & on\_time\_test, pulses\_count, duration, anomaly\_duration \\
+Pulse characteristics & 4 & avg/max/min\_pulse\_duration, duty\_cycle \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:aggregated_features} shows the comprehensive feature extraction strategy. The thrust and MFR statistics capture the central tendency and variability of thruster performance within each test. Temporal metrics quantify operational patterns, with on\_time\_test and pulses\_count reflecting usage intensity, while anomaly\_duration enables identification of abnormal behavior. Pulse characteristics provide insight into operational dynamics, with duty\_cycle being particularly important as it represents the fraction of time the thruster is active.
+
+The final aggregated dataset contains 2,611 rows × 33 columns (15 metadata + 18 computed features).
+
+\section{Exploratory Data Analysis}
+
+\subsection{Summary Statistics}
+
+\begin{table}[H]
+\centering
+\caption{Key statistics by dataset split}
+\label{tab:summary_stats}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Feature} & \multicolumn{2}{c}{\textbf{Train (SN01-12)}} & \multicolumn{2}{c}{\textbf{Test (SN13-24)}} \\
+& \textbf{Mean} & \textbf{Std} & \textbf{Mean} & \textbf{Std} \\
+\midrule
+\textbf{Performance Metrics} & & & & \\
+thrust\_mean (N) & 0.450 & 0.296 & 0.426 & 0.302 \\
+mfr\_mean (mg/s) & 568.2 & 378.3 & 541.8 & 384.0 \\
+\midrule
+\textbf{Aging Factors} & & & & \\
+cumulated\_throughput (kg) & 11.93 & 6.11 & 11.78 & 6.50 \\
+cumulated\_on\_time (hr) & 3.48 & 2.10 & 3.53 & 2.08 \\
+cumulated\_pulses & 10,638 & 6,855 & 10,804 & 6,785 \\
+\midrule
+\textbf{Operational Parameters} & & & & \\
+test\_pressure (bar) & 14.58 & 6.23 & 14.44 & 6.22 \\
+on\_time\_test (s) & 230.9 & 202.0 & 231.3 & 202.1 \\
+duty\_cycle & 0.481 & 0.284 & 0.481 & 0.284 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The summary statistics in Table \ref{tab:summary_stats} reveal several important patterns. First, the training and test sets exhibit remarkably similar distributions across all features, with mean thrust differing by only 5.3\% (0.450 vs 0.426 N) and comparable standard deviations, confirming successful randomization of the train/test split. Second, the substantial standard deviations in performance metrics (0.296-0.302 N for thrust) relative to their means (0.426-0.450 N) indicate high variability across different operating conditions. Third, the aging factors show considerable accumulated usage, with thrusters having completed an average of 10,600-10,800 pulses and accumulated 3.5 hours of on-time by the time of testing. The uniform distribution of test pressure (mean $\approx$ 14.5 bars, std $\approx$ 6.2 bars) spans the operational range from 5 to 24 bars, ensuring comprehensive coverage of operating conditions.
+
+\subsection{Distribution Analysis}
+
+Figure \ref{fig:distributions} shows the distributions of key performance metrics.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{outputs/figures/01_distribution_thrust_mean.png}
+\caption{Distribution of mean thrust}
+\label{fig:distributions}
+\end{figure}
+
+The thrust\_mean distribution presented in Figure \ref{fig:distributions} is right-skewed with a mode near 0.0 N (representing low-pressure acceptance tests) and a long tail extending to 1.3 N, reflecting the wide range of operating pressures (higher pressure produces higher thrust). The overall skewness of 0.578 quantifies this right-asymmetry. The distribution shape is consistent with the physical relationship where thrust scales approximately linearly with inlet pressure across the operational range (5-24 bars), with most tests conducted at lower thrust levels.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{outputs/figures/02_boxplots_train_test.png}
+\caption{Box plots comparing train and test distributions across key variables}
+\label{fig:boxplots}
+\end{figure}
+
+Figure \ref{fig:boxplots} compares the distributions of key variables between training and test sets. The boxplots reveal similar median values and interquartile ranges for both splits across all variables (test\_pressure, cumulated\_throughput, cumulated\_on\_time, thrust\_mean, mfr\_mean), validating that the serial-number-based split (SN01-12 vs SN13-24) produced balanced datasets. Minor differences in outlier patterns are visible but do not indicate systematic bias.
+
+\subsection{Correlation Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/02_correlation_matrix.png}
+\caption{Correlation matrix showing relationships between all numeric features}
+\label{fig:correlation}
+\end{figure}
+
+Figure \ref{fig:correlation} visualizes the full correlation structure. This indicate tight coupling within feature families: thrust statistics cluster together, MFR statistics form another cohesive group, and aging factors are mutually correlated. The vertical and horizontal bright bands corresponding to thrust\_median and mfr\_median confirm these as the most informative features. The consistent blue coloring in the aging factors' rows indicates their universal negative association with performance metrics. The relative independence between pulse characteristics (avg\_pulse\_duration, max\_pulse\_duration) and performance metrics suggests these are controlled variables rather than outcomes.
+
+\begin{table}[H]
+\centering
+\caption{Top correlations with target variables}
+\label{tab:correlations}
+\small
+\begin{tabular}{lrr}
+\toprule
+\textbf{Feature} & \textbf{thrust\_mean} & \textbf{mfr\_mean} \\
+\midrule
+\multicolumn{3}{l}{\textit{Positive Correlations (Performance Indicators)}} \\
+thrust\_median & 0.995 & 0.983 \\
+mfr\_median & 0.977 & 0.983 \\
+thrust\_max & 0.867 & 0.860 \\
+test\_pressure & 0.685 & 0.681 \\
+thrust\_std & 0.559 & 0.560 \\
+mfr\_max & 0.523 & 0.540 \\
+duty\_cycle & 0.467 & 0.465 \\
+\midrule
+\multicolumn{3}{l}{\textit{Negative Correlations (Aging Indicators)}} \\
+test\_id & -0.603 & -0.593 \\
+cumulated\_on\_time & -0.597 & -0.588 \\
+cumulated\_pulses & -0.579 & -0.570 \\
+cumulated\_throughput & -0.478 & -0.469 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The correlation analysis in Table \ref{tab:correlations} reveals the structure of relationships in the data. The extremely high correlations between thrust\_mean and thrust\_median (r = 0.995) and mfr\_mean and mfr\_median (r = 0.983) indicate stable, symmetric performance within individual test sequences. The strong positive correlation between thrust\_mean and test\_pressure (r = 0.685) confirms the expected physical relationship: higher inlet pressure drives higher mass flow rate and consequently higher thrust. The moderate negative correlations with aging factors (r = -0.48 to -0.60) quantify the performance degradation phenomenon, with test\_id showing the strongest degradation signal because it captures both aging and operational stress accumulation in chronological order.
+
+\subsection{Aging Effects}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/05_cumulated_throughput_vs_performance.png}
+\caption{Performance degradation with cumulative throughput showing 20-30\% decline over thruster lifetime}
+\label{fig:aging}
+\end{figure}
+
+Figure \ref{fig:aging} plots thrust\_mean and mfr\_mean against cumulated\_throughput, demonstrating clear degradation trends. Both metrics decline from approximately 0.8 N and 800 mg/s at beginning-of-life to 0.2 N and 300 mg/s at end-of-life, representing a 75\% performance loss over the thruster lifetime. The relationship appears approximately linear with scatter indicating unit-to-unit variability. This degradation is attributed to catalyst bed deterioration, where alumina-based iridium granules are progressively damaged by thermoelastic shocks and mechanical collisions during repeated firing cycles.
+
+\subsection{Pressure Effects}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{outputs/figures/03_boxplots_by_pressure.png}
+\caption{Performance variation by inlet pressure level}
+\label{fig:pressure}
+\end{figure}
+
+Figure \ref{fig:pressure} illustrates how thrust and mass flow rate vary with inlet test pressure. The boxplots show monotonic increases in both metrics as pressure rises from 5 to 24 bars. At low pressures (5-9 bars), thrust remains below 0.4 N with tight distributions, while at high pressures (21-24 bars), thrust reaches 0.6-1.05 N with increased variability. The wider spread at higher pressures reflects aging effects: fresh thrusters achieve higher performance than degraded units at the same pressure. This confirms test\_pressure as the primary instantaneous performance driver.
+
+\subsection{Train-Test Comparison}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/07_train_test_comparison.png}
+\caption{Distribution comparison between training (SN01-12) and test (SN13-24) sets}
+\label{fig:train_test}
+\end{figure}
+
+Figure \ref{fig:train_test} overlays the distributions of key variables for training and test sets. The nearly perfect overlap across all features (thrust\_mean, test\_pressure, cumulated\_throughput, cumulated\_on\_time) confirms the representativeness of the serial-number-based split. This shows us that models trained on SN01-12 can generalize to SN13-24.
+
+\subsection{Key Findings from Exploration}
+
+\begin{enumerate}
+    \item \textbf{Data Quality}: Zero missing values, zero duplicates, 10.3\% anomaly rate as expected
+    \item \textbf{Degradation}: 20-30\% performance decline over operational lifetime ($r = -0.48$ to $-0.60$)
+    \item \textbf{Pressure Dominance}: Inlet pressure is the strongest instantaneous predictor ($r = 0.68$)
+    \item \textbf{Multicollinearity}: Three aging factors are nearly redundant ($r > 0.9$)
+    \item \textbf{Representative Split}: Train and test sets have similar distributions
+\end{enumerate}
+
+%===============================================================================
+% MIDTERM 2: FEATURE ENGINEERING AND MODELING
+%===============================================================================
+
+\newpage
+\section{Feature Engineering}
+
+\subsection{Time Series Feature Engineering}
+
+The modeling phase required transforming sequence-level aggregated data back into time series predictions. We engineered 18 features for point-by-point thrust prediction through backward elimination feature selection:
+
+\begin{table}[H]
+\centering
+\caption{Engineered features for time series prediction (18 total, BIC-optimal subset)}
+\label{tab:features}
+\small
+\begin{tabular}{llp{7cm}}
+\toprule
+\textbf{Feature Group} & \textbf{Count} & \textbf{Description} \\
+\midrule
+Current state & 1 & ton[t] \\
+Autoregressive & 9 & thrust[t-2] through thrust[t-10] \\
+Command history & 2 & ton[t-3], ton[t-5] \\
+Previous MFR & 1 & mfr[t-1] \\
+Rolling statistics & 2 & rolling\_mean, rolling\_std (window=10) \\
+Aging factors & 2 & cumulated\_on\_time, cumulated\_pulses \\
+Test parameters & 1 & test\_pressure \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:features} outlines the optimized feature engineering strategy designed to capture temporal dependencies in thrust dynamics. Through backward elimination with BIC criterion, we identified an 18-feature subset that maintains predictive accuracy while eliminating redundancy. The autoregressive features (9 previous thrust values, t-2 through t-10) enable the model to learn momentum and transient response patterns; thrust[t-1] was excluded as redundant with rolling\_mean. Sparse command history features (ton[t-3], ton[t-5]) capture the delayed response to valve state changes, as thruster performance exhibits 50-500ms latency; intermediate lags (ton[t-1], ton[t-2], ton[t-4]) provide minimal additional information. Rolling statistics summarize local trends without requiring the full history. Two aging factors (cumulated\_on\_time, cumulated\_pulses) provide the long-term degradation context; cumulated\_throughput was excluded due to high multicollinearity (r $>$ 0.95 with the other aging factors). Test\_pressure captures the primary physical driver. Temporal progress (time\_progress) was excluded as it provides weak signal relative to cumulative aging factors.
+
+\subsection{Feature Engineering Rationale}
+
+\textbf{Autoregressive Features (thrust[t-2..t-10])}: The prior thrust values are the strongest predictors because thruster dynamics exhibit strong temporal autocorrelation. At 100 Hz sampling, these 9 samples cover 20-100ms, capturing the transient response time constant. thrust[t-1] was excluded as it is highly redundant with rolling\_mean (correlation $>$ 0.99), providing no additional predictive value while increasing model complexity.
+
+\textbf{Sparse Command History (ton[t-3], ton[t-5])}: Valve commands influence thrust with a 30-50ms delay due to propellant travel time and catalyst reaction kinetics. Backward elimination identified that only two command lags (t-3 and t-5) are necessary; intermediate lags (ton[t-1], ton[t-2], ton[t-4]) provide marginal information gain given the autoregressive features already capture short-term dynamics.
+
+\textbf{Rolling Statistics}: These features compress the last 10 samples into summary statistics (mean and standard deviation), reducing effective dimensionality while retaining information about local trends and variability. Rolling\_mean serves as a robust proxy for thrust[t-1], while rolling\_std captures transient volatility.
+
+\textbf{Aging Factors (cumulated\_on\_time, cumulated\_pulses)}: These global features provide the degradation context that slowly modulates the thrust response over thousands of firing cycles. cumulated\_throughput was excluded due to extreme multicollinearity (r $>$ 0.95) with the other two aging metrics; retaining all three adds no predictive benefit while inflating coefficient variance. Temporal progress (time\_progress) was also excluded as it provides weak signal relative to the cumulative aging factors, which more directly quantify wear.
+
+\section{Feature Selection / Dimensionality Reduction}
+
+\subsection{Methodology}
+
+We evaluated multiple feature selection and dimensionality reduction approaches on 500,000 training samples. Initially, 24 candidate features were engineered (including thrust[t-1], ton[t-1..t-4], cumulated\_throughput, and time\_progress). Through backward elimination with BIC criterion, we identified an 18-feature optimal subset, which serves as the baseline for comparison:
+
+\begin{enumerate}
+    \item \textbf{Baseline}: 18 features identified via backward elimination (BIC-optimal subset)
+    \item \textbf{SelectKBest (F-test)}: Statistical test-based selection with k = 5, 10, 15
+    \item \textbf{SelectKBest (Mutual Information)}: Information-theoretic selection with k = 10
+    \item \textbf{PCA}: Principal component analysis retaining 90\%, 95\%, 99\% variance
+    \item \textbf{Backward Elimination}: Wrapper-based method starting from the 18-feature baseline. At each step, every remaining feature is held out in turn, a Ridge model is retrained, and the feature whose exclusion yields the lowest RMSE is permanently removed. The procedure runs down to 3 features. Both RMSE and information criteria (AIC, BIC) are computed at the optimal stopping point to quantify the parsimony-accuracy trade-off.
+\end{enumerate}
+
+\subsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Feature selection comparison (Ridge regression on 500K samples)}
+\label{tab:feature_selection}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Method} & \textbf{Features} & \textbf{RMSE (N)} & \textbf{R²} & \textbf{BIC} & \textbf{Train Time (s)} \\
+\midrule
+Baseline & 24 & 0.0573 & 0.9719 & -2,831,349 & 0.108 \\
+SelectKBest F (k=15) & 15 & 0.0574 & 0.9718 & -2,830,466 & 0.071 \\
+SelectKBest F (k=10) & 10 & 0.0576 & 0.9716 & -2,823,632 & 0.043 \\
+SelectKBest F (k=5) & 5 & 0.0591 & 0.9701 & -2,801,648 & 0.027 \\
+SelectKBest MI (k=10) & 10 & 0.0576 & 0.9716 & -2,823,628 & 0.030 \\
+PCA (99\% var) & 10 & 0.0573 & 0.9719 & -2,831,025 & 0.030 \\
+PCA (95\% var) & 4 & 0.0670 & 0.9616 & -2,648,122 & 0.017 \\
+PCA (90\% var) & 3 & 0.0670 & 0.9616 & -2,648,135 & 0.014 \\
+\midrule
+\multicolumn{6}{l}{\textit{Wrapper method (further reduction from 18-feature baseline)}} \\
+Backward Elim. & 18 & 0.0573 & 0.9719 & \textbf{-2,831,412} & 0.064 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:feature_selection} demonstrates that the BIC-optimal 18-feature subset (identified through initial backward elimination from 24 candidates) achieves excellent performance (RMSE = 0.0573 N, R² = 0.9719, BIC = -2,831,412). SelectKBest methods with k=15 and PCA retaining 99\% variance achieve nearly identical RMSE (difference $< 0.0001$ N), but BIC penalizes the additional complexity, favoring the 18-feature baseline (BIC = -2,831,412 vs. -2,830,466 and -2,831,025 respectively). Further aggressive dimensionality reduction (k=5 or PCA 95\% variance) causes measurable performance degradation (R² drops from 0.9719 to 0.9701-0.9616), with RMSE increasing by 3-17\% and BIC deteriorating substantially to -2,801,648 and -2,648,122. The SelectKBest F-test identifies autoregressive lags (thrust[t-2..t-10]) and rolling\_mean as the most statistically significant features, while PCA creates orthogonal combinations capturing 99\% of variance in just 10 dimensions. The wrapper-based backward elimination method confirms that 18 features represent the optimal balance: further reduction increases prediction error, while the 6 excluded features (thrust[t-1], ton[t-1,t-2,t-4], cumulated\_throughput, time\_progress) contribute negligible information given the retained set. The full elimination-path trajectory is shown in Figure~\ref{fig:backward_elim}.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/feature_selection_comparison.png}
+\caption{Performance comparison across feature selection methods}
+\label{fig:feature_selection}
+\end{figure}
+
+Figure \ref{fig:feature_selection} visualizes the trade-off between model complexity and predictive performance. The left panel shows that RMSE remains remarkably stable as the feature count is reduced from 18 (the BIC-optimal baseline) down to 10. This plateau indicates that the backward elimination process successfully removed the most redundant features from the original 24 candidates. However, once the feature set drops below 10, the error begins to rise, with a sharp degradation occurring during aggressive dimensionality reduction (4 features and below).
+This analysis confirms that while a subset of 10 features (primarily autoregressive lags and rolling statistics) captures the bulk of the thrust dynamics, the BIC-optimal 18-feature baseline achieves the best balance between model parsimony and predictive accuracy.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/feature_importance_scores.png}
+\caption{Feature importance scores from SelectKBest F-test}
+\label{fig:importance_scores}
+\end{figure}
+
+Figure~\ref{fig:importance_scores} illustrates the feature importance hierarchy according to univariate F-test statistics. The analysis reveals that the immediate autoregressive lags (the most recent thrust values) are the most dominant predictors, confirming that thruster dynamics are characterized by strong short-term temporal autocorrelation.
+The importance scores exhibit a clear exponential decay as the time lag increases; while the first few milliseconds of history are critical for capturing momentum and transient responses, the predictive contribution of older samples diminishes rapidly.
+Among the engineered features, rolling statistics (particularly the rolling mean) stand out as high-significance predictors, often outranking deeper autoregressive lags. This suggests that the local average provides a more robust signal for the model than individual distant points in time. Command history features show moderate importance, capturing the physical latency between valve activation and thrust generation. Aging factors and test parameters, while appearing at the lower end of the statistical ranking, provide the necessary long-term context that modulates the baseline thrust levels. This hierarchy aligns with physical intuition: immediate momentum and valve states drive the fast dynamics, while cumulative wear and pressure set the operational bounds.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/pca_variance_analysis.png}
+\caption{PCA explained variance and cumulative variance}
+\label{fig:pca}
+\end{figure}
+
+Figure~\ref{fig:pca} shows the PCA explained-variance decomposition.  The left panel plots the individual and cumulative explained-variance ratios per principal component; the cumulative curve crosses the 95\% and 99\% thresholds at 4 and 10 components respectively, matching the dimensionality-reduction experiments in Table~\ref{tab:feature_selection}.  The right panel compares the total variance retained for fixed component counts (5, 10, 15, 24), confirming that 10 components suffice to preserve 99\% of the feature-space variance.  The steep initial rise and subsequent flattening indicate that the feature set contains substantial redundancy, driven primarily by the high inter-correlations among autoregressive lags.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/backward_elimination_path.png}
+\caption{Backward elimination path}
+\label{fig:backward_elim}
+\end{figure}
+
+Figure~\ref{fig:backward_elim} plots the RMSE trajectory across the elimination steps.  The curve remains nearly flat during the early removals --- corresponding to features with low marginal predictive value --- and begins to rise only once core autoregressive lags or rolling statistics are excluded.  The optimal point identified by the algorithm retains a feature set whose performance is on par with the full 24-feature baseline, validating that the manually engineered features are collectively well-chosen even though a small subset is redundant.
+
+\subsection{Conclusion}
+
+The feature selection analysis validates the BIC-optimal 18-feature subset as the best balance between model parsimony and predictive accuracy. Starting from 24 candidate features, backward elimination with BIC criterion identified 6 redundant features (thrust[t-1], ton[t-1,t-2,t-4], cumulated\_throughput, time\_progress) that provide negligible additional information. Both filter methods (SelectKBest F-test and Mutual Information) and dimensionality reduction (PCA at 99\% variance) confirm that 10--15 features capture the bulk of predictive information, with RMSE degradation appearing only when the feature count drops below 10. The wrapper-based backward elimination produces a consistent picture: features can be removed in order of decreasing expendability, and the RMSE curve stays flat until core autoregressive and rolling-statistic features are targeted. PCA at 95\% and 90\% variance incurs a 17\% RMSE penalty, demonstrating that lower-variance components still contribute meaningfully to prediction accuracy. The 18-feature set achieves the lowest BIC (-2,831,412) among all tested configurations, indicating optimal model fit while appropriately penalizing complexity. We therefore use this 18-feature set for the final Ridge and HistGradientBoosting models.
+
+\section{Ridge Regression Model}
+
+\subsection{Model Architecture}
+
+Ridge regression, also known as L2 regularization or Tikhonov regularization, is a statistical method for improving the stability and generalization performance of linear regression models. It addresses two common problems in predictive modeling: multicollinearity (high correlation between predictor variables) and overfitting on training data.
+
+The algorithm works by adding a penalty term to the ordinary least squares (OLS) objective function. This penalty term, controlled by the regularization parameter $\alpha$ (also denoted as $\lambda$ in literature), constrains the magnitude of the regression coefficients. Unlike standard linear regression, which may produce unstable coefficient estimates when predictors are correlated, Ridge regression shrinks all coefficients proportionally toward zero without eliminating any features entirely. Higher-value coefficients are penalized more heavily than lower-value coefficients, effectively reducing the model's sensitivity to individual predictors.
+
+This coefficient shrinkage introduces a controlled amount of bias into the model in exchange for substantially reduced variance—a concept known as the bias-variance tradeoff. While Ridge predictions may be slightly less accurate on training data, they typically generalize better to unseen test data, making the model more robust and reliable in production environments.
+
+The optimal value of $\alpha$ is typically determined through cross-validation techniques or data-driven methods such as generalized cross-validation (GCV). In this work, hyperparameter tuning was performed using RandomizedSearchCV, which identified the following optimal configuration:
+
+\begin{itemize}
+    \item Regularization strength: $\alpha$ = 2.0
+    \item Solver: Cholesky decomposition
+\end{itemize}
+
+The Cholesky solver provides an exact, efficient solution for Ridge regression by decomposing the regularized normal equations matrix. This approach is particularly well-suited for problems with moderate feature dimensionality and large sample sizes, as in the present thrust prediction task.
+
+\subsection{Training Results}
+
+\begin{table}[H]
+\centering
+\caption{Ridge regression training on full dataset (18 features)}
+\label{tab:ridge_training}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Training samples & 81,167,652 \\
+Features & 18 \\
+Training time & 43.08 seconds (43 sec) \\
+Training RMSE & 0.0592 N \\
+Training MAE & 0.0291 N \\
+Training R² & 0.9713 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:ridge_training} summarizes the Ridge model training on 81 million samples with 18 optimally selected features. The 43-second training time represents a significant speedup compared to larger feature sets, demonstrating the computational efficiency of the BIC-optimal subset. The Cholesky solver provides exact solutions efficiently for this problem size. The training RMSE of 0.0592 N represents approximately 13\% error relative to the mean thrust (0.45 N), indicating strong fit. The R² of 0.9713 means the model explains 97.13\% of thrust variance. The training MAE (0.0291 N) being approximately half the RMSE suggests that most errors are small, with occasional larger residuals inflating RMSE.
+
+\subsection{Test Set Evaluation}
+
+\begin{table}[H]
+\centering
+\caption{Ridge regression test set results (SN13-SN24)}
+\label{tab:ridge_test}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Test samples & 86,091,312 \\
+Test RMSE & \textbf{0.0577 N} \\
+Test MAE & 0.0281 N \\
+Test R² & 0.9716 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The test set results in Table \ref{tab:ridge_test} demonstrate excellent generalization. The test RMSE (0.0577 N) is actually lower than training RMSE (0.0592 N), and test R² (0.9716) slightly exceeds training R² (0.9713). This counter-intuitive result suggests that test thrusters (SN13-24) may be slightly more predictable than training thrusters (SN01-12), possibly due to manufacturing improvements or test protocol refinements in later serial numbers.
+
+\subsection{Predictions Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/ridge/thrust_predictions_scatter.png}
+\caption{Ridge: Predicted vs actual thrust}
+\label{fig:ridge_scatter}
+\end{figure}
+
+Figure~\ref{fig:ridge_scatter} presents the predicted-vs.-actual thrust scatter for the Ridge model.  Points cluster tightly along the identity line across the full thrust range (0--1.3 N), confirming strong agreement between predictions and ground truth with no systematic bias.  The higher point density near 0--0.3 N reflects the prevalence of low-pressure tests in the dataset.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/ridge/residual_analysis.png}
+\caption{Ridge: Residual analysis}
+\label{fig:ridge_residuals}
+\end{figure}
+
+Figure~\ref{fig:ridge_residuals} shows the Ridge residual analysis and model diagnostics.   The left panel displays residuals versus predicted thrust values, showing points distributed around the zero line with relatively uniform spread across most of the prediction range, though some increase in variance is observed at higher predicted values. The error statistics indicate a mean residual near zero (-0.000285 N) and standard deviation of 0.0577 N. However, the skewness of 3.425 reveals a right-tailed distribution, suggesting the model occasionally produces larger positive errors. The right panel presents error distribution by percentile, showing that 50\% of predictions have absolute errors below 0.0070 N, while 90\%, 95\%, and 99\% of predictions have absolute errors below 0.0838 N, 0.1316 N, and 0.2193 N respectively.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/ridge/time_series_examples.png}
+\caption{Ridge: Time series prediction examples}
+\label{fig:ridge_time_series}
+\end{figure}
+
+Figure~\ref{fig:ridge_time_series} overlays Ridge predictions on three representative time-series segments.  The model faithfully tracks both the on/off switching transients and the steady-state thrust plateau.  Minor deviations occur during valve-transition periods, where the physical 50--500\,ms propellant-travel latency produces brief prediction errors that the autoregressive features partially, but not fully, capture.
+
+\subsection{Per-Thruster Performance}
+
+\begin{table}[H]
+\centering
+\caption{Ridge per-thruster test results}
+\label{tab:ridge_per_thruster}
+\small
+\begin{tabular}{lrrrc}
+\toprule
+\textbf{Thruster} & \textbf{RMSE (N)} & \textbf{MAE (N)} & \textbf{R²} & \textbf{Samples} \\
+\midrule
+SN13 & 0.0449 & 0.0216 & 0.9710 & 7.17M \\
+SN14 & 0.0553 & 0.0280 & 0.9708 & 7.17M \\
+SN15 & \textbf{0.0266} & \textbf{0.0124} & \textbf{0.9744} & 7.17M \\
+SN16 & 0.0624 & 0.0311 & 0.9713 & 7.17M \\
+SN17 & 0.0600 & 0.0297 & 0.9714 & 7.17M \\
+SN18 & 0.0652 & 0.0318 & 0.9703 & 7.17M \\
+SN19 & 0.0631 & 0.0312 & 0.9711 & 7.17M \\
+SN20 & 0.0568 & 0.0280 & 0.9712 & 7.17M \\
+SN21 & 0.0665 & 0.0318 & 0.9701 & 7.17M \\
+SN22 & 0.0588 & 0.0297 & 0.9711 & 7.17M \\
+SN23 & 0.0617 & 0.0316 & 0.9698 & 7.17M \\
+SN24 & 0.0599 & 0.0302 & 0.9712 & 7.17M \\
+\midrule
+\textbf{Mean} & 0.0568 & 0.0281 & 0.9711 & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:ridge_per_thruster} breaks down Ridge performance by individual test thruster. SN15 achieves exceptional results (RMSE = 0.0266 N, R² = 0.9744), suggesting this unit's behavior closely matches the learned patterns. SN21 shows the highest RMSE (0.0665 N), though still maintaining R² = 0.9701, indicating some unit-specific dynamics not fully captured by the model. The standard deviation across thrusters is 0.0107 N, representing 19\% of the mean RMSE, demonstrating reasonable consistency. All 12 test thrusters achieve $R^2 > 0.97$, confirming robust generalization across units.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{outputs/ridge/per_thruster_performance.png}
+\caption{Ridge: Per-thruster performance breakdown}
+\label{fig:ridge_per_thruster}
+\end{figure}
+
+Figure \ref{fig:ridge_per_thruster} visualizes the per-thruster performance variation. The left panel shows RMSE ranging from 0.027 N (SN15) to 0.067 N (SN21), with most thrusters clustered around 0.055-0.065 N. The center panel shows MAE following a similar pattern but with lower absolute values (0.012-0.032 N), confirming that large errors are rare. The right panel demonstrates R² consistency, with all values between 0.970 and 0.975, indicating uniform high-quality fits despite RMSE variation. The error bars represent 95\% confidence intervals estimated via bootstrap resampling.
+
+\section{Histogram-based Gradient Boosting Model}
+
+\subsection{Model Architecture}
+
+Histogram-based Gradient Boosting (HistGradientBoosting) is a modern ensemble learning method that builds sequential decision trees to iteratively correct prediction errors. Inspired by LightGBM, this algorithm is specifically optimized for large-scale datasets through an efficient histogram binning technique.
+
+The algorithm operates by constructing an ensemble of decision trees in stages. Each new tree is trained to predict the residual errors left by the existing ensemble, effectively learning from the mistakes of previous trees. This sequential error-correction process, known as gradient boosting, allows the model to capture complex, non-linear relationships in the data that simpler models might miss. The "gradient" refers to the mathematical technique used to determine how each new tree should adjust predictions to minimize the overall loss function.
+
+Unlike traditional gradient boosting implementations, HistGradientBoosting achieves significant computational speedup by binning continuous feature values into discrete integer bins (typically 256 bins) before tree construction. This histogram-based approach dramatically reduces the number of potential split points that must be evaluated when building each tree, transforming an operation that normally requires sorting samples at every node into a much faster histogram lookup. For datasets with tens of thousands of samples or more, this optimization can provide orders-of-magnitude performance improvements over conventional gradient boosting methods.
+
+The algorithm includes several built-in advantages for real-world tabular data. It natively handles missing values by learning during training whether samples with missing data should be directed to the left or right child at each split point. The L2 regularization parameter applies a penalty to leaf values, helping prevent overfitting by constraining the magnitude of adjustments each tree can make. The learning rate controls how aggressively each tree corrects previous errors, with lower values producing more conservative updates that often generalize better. The algorithm also leverages OpenMP-based parallelization across multiple stages of the fitting and prediction process, including histogram construction, split-point evaluation, and gradient computation.
+
+For the thrust prediction task, hyperparameters were selected via RandomizedSearchCV tuning:
+
+\begin{itemize}
+    \item Base learners: Decision trees with max\_depth = None (unrestricted depth)
+    \item Ensemble size: 150 trees (max\_iter = 150)
+    \item Learning rate: 0.15 (moderate learning rate for stable convergence)
+    \item Minimum samples per leaf: 10 (mild leaf regularization)
+    \item L2 regularization: 0.1 (light coefficient penalty for generalization)
+\end{itemize}
+
+The unrestricted tree depth allows individual trees to capture complex feature interactions, while the minimum samples per leaf and L2 regularization parameters provide sufficient regularization to prevent overfitting. The moderate ensemble size of 150 trees and learning rate of 0.15 represent a balance between model expressiveness and training efficiency.
+
+\subsection{Training Results}
+
+\begin{table}[H]
+\centering
+\caption{HistGradientBoosting training on full dataset (18 features)}
+\label{tab:hgb_training}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Training samples & 81,167,652 \\
+Features & 18 \\
+Training time & 250.22 seconds (250 sec) \\
+Trees fitted & 150 (4,650 total leaves) \\
+Training RMSE & 0.0564 N \\
+Training MAE & 0.0266 N \\
+Training R² & 0.9740 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:hgb_training} shows that HistGradientBoosting achieves superior training metrics compared to Ridge (RMSE 0.0564 vs 0.0592 N, R² 0.9740 vs 0.9713) but requires 5.8× longer training time (250s vs 43s). The 150 trees with 4,650 total leaves indicate an average of 31 leaves per tree, suggesting moderate tree complexity. The longer training time reflects the iterative nature of gradient boosting, where each tree is fitted sequentially. Despite this, HistGradientBoosting's histogram-based optimization still enables practical training on 81 million samples, with binning dramatically reducing the number of split point evaluations compared to exact gradient boosting methods.
+
+\subsection{Test Set Evaluation}
+
+\begin{table}[H]
+\centering
+\caption{HistGradientBoosting test set results (SN13-SN24)}
+\label{tab:hgb_test}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Test samples & 86,091,312 \\
+Test RMSE & 0.0585 N \\
+Test MAE & \textbf{0.0257 N} \\
+Test R² & 0.9708 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The test results in Table \ref{tab:hgb_test} reveal an interesting pattern. While training metrics favor HistGradientBoosting over Ridge, test RMSE is slightly worse (0.0585 vs 0.0577 N) and test R² is marginally lower (0.9708 vs 0.9716). However, HistGradientBoosting achieves the best MAE (0.0257 N vs 0.0281 N for Ridge), indicating superior median prediction quality. The MAE advantage suggests HistGradientBoosting handles typical predictions better, while the RMSE disadvantage indicates it produces occasional larger errors that disproportionately inflate RMSE (which squares errors).
+
+\subsection{Predictions Analysis}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/hist_gradient_boosting/thrust_predictions_scatter.png}
+\caption{HistGradientBoosting: Predicted vs actual thrust}
+\label{fig:hgb_scatter}
+\end{figure}
+
+Figure~\ref{fig:hgb_scatter} shows the predicted-vs.-actual scatter for HistGradientBoosting.  The overall pattern mirrors Ridge (Figure~\ref{fig:ridge_scatter}), but a slightly wider spread is visible at higher thrust values, consistent with the occasional larger errors on specific thrusters (SN20, SN23) noted in the per-thruster analysis.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/hist_gradient_boosting/residual_analysis.png}
+\caption{HistGradientBoosting: Residual analysis}
+\label{fig:hgb_residuals}
+\end{figure}
+
+Figure~\ref{fig:hgb_residuals} presents the HistGradientBoosting residual analysis and model diagnostics. The left panel shows residuals versus predicted thrust values, with points distributed around the zero line across the full prediction range. While most predictions exhibit small errors, the distribution shows some increase in variance at higher predicted values. The error statistics reveal a mean residual near zero (-0.000070 N) and standard deviation of 0.0585 N, comparable to Ridge. However, the skewness of 29.944 indicates an extremely heavy right tail, suggesting the model occasionally produces substantially larger positive errors than Ridge (which had skewness of 3.425). The right panel quantifies this via error percentiles: while 50\% of predictions have absolute errors below 0.0048 N (even better than Ridge's 0.0070 N), the tail behavior is more pronounced, with 90\%, 95\%, and 99\% of predictions having absolute errors below 0.0812 N, 0.1228 N, and 0.2162 N respectively. This pattern reflects the model's excellent median performance coupled with occasional large errors on specific thrusters, particularly SN20 and SN23.
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/hist_gradient_boosting/time_series_examples.png}
+\caption{HistGradientBoosting: Time series prediction examples}
+\label{fig:hgb_time_series}
+\end{figure}
+
+Figure~\ref{fig:hgb_time_series} presents HistGradientBoosting time-series predictions alongside actual thrust.  The model captures switching dynamics and steady-state levels with fidelity comparable to Ridge.  The piecewise-constant nature of tree predictions is visible as slightly sharper transitions at valve activation, contrasting with Ridge's smoother interpolation.
+
+\subsection{Per-Thruster Performance}
+
+\begin{table}[H]
+\centering
+\caption{HistGradientBoosting per-thruster test results}
+\label{tab:hgb_per_thruster}
+\small
+\begin{tabular}{lrrrc}
+\toprule
+\textbf{Thruster} & \textbf{RMSE (N)} & \textbf{MAE (N)} & \textbf{R²} & \textbf{Samples} \\
+\midrule
+SN13 & 0.0433 & 0.0200 & 0.9730 & 7.17M \\
+SN14 & 0.0525 & 0.0257 & 0.9737 & 7.17M \\
+SN15 & \textbf{0.0246} & \textbf{0.0091} & \textbf{0.9781} & 7.17M \\
+SN16 & 0.0594 & 0.0286 & 0.9739 & 7.17M \\
+SN17 & 0.0604 & 0.0275 & 0.9710 & 7.17M \\
+SN18 & 0.0621 & 0.0294 & 0.9731 & 7.17M \\
+SN19 & 0.0599 & 0.0287 & 0.9739 & 7.17M \\
+SN20 & 0.0792 & 0.0260 & \textit{0.9441} & 7.17M \\
+SN21 & 0.0645 & 0.0294 & 0.9719 & 7.17M \\
+SN22 & 0.0557 & 0.0274 & 0.9740 & 7.17M \\
+SN23 & 0.0668 & 0.0290 & \textit{0.9646} & 7.17M \\
+SN24 & 0.0568 & 0.0278 & 0.9741 & 7.17M \\
+\midrule
+\textbf{Mean} & 0.0571 & 0.0257 & 0.9713 & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:hgb_per_thruster} reveals interesting per-thruster patterns for HistGradientBoosting. SN15 again achieves exceptional performance (RMSE = 0.0246 N, R² = 0.9781), similar to Ridge. However, SN20 shows significantly degraded performance (RMSE = 0.0792 N, R² = 0.9441), much worse than Ridge's SN20 results (RMSE = 0.0568 N, R² = 0.9712). This suggests SN20 exhibits dynamics outside HistGradientBoosting's training distribution, causing the tree-based model to struggle with extrapolation. SN23 also shows reduced R² (0.9646) compared to other units, indicating unit-specific behavior.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{outputs/hist_gradient_boosting/per_thruster_performance.png}
+\caption{HistGradientBoosting: Per-thruster performance breakdown}
+\label{fig:hgb_per_thruster}
+\end{figure}
+
+Figure \ref{fig:hgb_per_thruster} shows more variability in per-thruster performance compared to Ridge (Figure \ref{fig:ridge_per_thruster}). The RMSE panel (left) displays a wider range (0.024-0.080 N vs Ridge's 0.027-0.067 N), with SN20 as a clear outlier. The MAE panel (center) shows less variability and generally lower values than Ridge, confirming the model's strength in typical predictions. The R² panel (right) reveals that while most thrusters achieve $R^2 > 0.97$, SN20 and SN23 fall below this threshold, indicating sensitivity to specific unit characteristics not captured during training.
+
+\section{Hyperparameter Tuning}
+
+\subsection{Methodology}
+
+Hyperparameter tuning was performed using RandomizedSearchCV on 500,000 training samples with 5-fold cross-validation. For computational efficiency, we tuned on a data subset rather than the full 81 million samples.
+
+\subsubsection{Ridge Regression Tuning}
+
+Search space:
+\begin{itemize}
+    \item $\alpha$: [0.1, 1, 2, 5, 10, 50, 100, 200, 500, 1000]
+    \item solver: ['auto', 'cholesky', 'sag', 'saga', 'lsqr']
+\end{itemize}
+
+\subsubsection{HistGradientBoosting Tuning}
+
+Search space:
+\begin{itemize}
+    \item learning\_rate: [0.05, 0.1, 0.15, 0.2]
+    \item max\_iter: [100, 150, 200]
+    \item max\_depth: [None, 5, 10, 15]
+    \item min\_samples\_leaf: [10, 20, 50]
+    \item l2\_regularization: [0.0, 0.1, 0.5, 1.0]
+\end{itemize}
+
+\subsection{Results}
+
+\begin{table}[H]
+\centering
+\caption{Hyperparameter tuning results (500K train, 100K test subsamples)}
+\label{tab:tuning_results}
+\small
+\begin{tabular}{lp{5cm}rrrr}
+\toprule
+\textbf{Model} & \textbf{Best Parameters} & \thead{\textbf{CV}\\\textbf{RMSE}} & \thead{\textbf{Subsample}\\\textbf{Test RMSE}} & \thead{\textbf{Full Test}\\\textbf{RMSE}} & \thead{\textbf{Full Test}\\\textbf{R²}} \\
+\midrule
+Ridge & $\alpha$=2.0, solver=cholesky & 0.0591 & 0.0571 & 0.0577 & 0.9716 \\
+HistGB & lr=0.15, iter=150, depth=None, leaf=10, l2=0.1 & 0.0589 & 0.0585 & 0.0585 & 0.9708 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:tuning_results} presents the optimal hyperparameters identified through RandomizedSearchCV on 500K training samples. For Ridge, the optimal regularization strength ($\alpha$ = 2.0) is moderate, providing appropriate coefficient shrinkage without over-penalizing predictive features. This is substantially lower than typical defaults, indicating the 18-feature set is already well-curated and benefits from lighter regularization. The Cholesky solver provides exact solutions efficiently via matrix decomposition. For HistGradientBoosting, the optimal learning rate (0.15) is moderate, balancing training speed and accuracy. Full-depth trees (max\_depth = None) outperform depth-limited trees, suggesting the problem benefits from flexible function approximation. The optimal min\_samples\_leaf (10) provides minimal regularization at the leaf level, while l2\_regularization (0.1) applies global regularization. The full-dataset test RMSE closely matches subsample test RMSE, confirming that the tuned hyperparameters generalize well beyond the tuning subset.
+
+\subsection{Cross-Validation Performance}
+
+The CV RMSE values (0.0591 for Ridge, 0.0588 for HistGradientBoosting) closely match the test RMSE values (0.0571, 0.0576), validating the representativeness of the tuning subset and confirming that the models generalize well beyond the tuning data. The small performance improvement from tuning ($<$ 1\% RMSE reduction) indicates that the manually selected baseline hyperparameters were already near-optimal, and the feature engineering quality is the primary driver of model performance.
+
+%===============================================================================
+% MODEL COMPARISON
+%===============================================================================
+
+\newpage
+\section{Model Comparison}
+
+\subsection{Overall Performance}
+
+\begin{table}[H]
+\centering
+\caption{Final model comparison on test set (86M samples, 18 features)}
+\label{tab:comparison}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Model} & \textbf{RMSE (N)} & \textbf{MAE (N)} & \textbf{R²} & \textbf{Training Time} \\
+\midrule
+Ridge Regression & \textbf{0.0577} & 0.0281 & \textbf{0.9716} & \textbf{43 sec} \\
+HistGradientBoosting & 0.0585 & \textbf{0.0257} & 0.9708 & 250 sec \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table \ref{tab:comparison} summarizes the final model comparison. Ridge achieves the best RMSE (0.0577 N), R² (0.9716), and fastest training time (43 sec), while HistGradientBoosting achieves the best MAE (0.0257 N). The performance differences are small in absolute terms (RMSE differs by 1.4\%, MAE by 8.5\%, R² by 0.1\%), indicating both models are highly competitive. The feature reduction from 24 to 18 significantly accelerated Ridge training without sacrificing accuracy. The choice between models depends on the application: if minimizing worst-case errors and training time are critical, choose Ridge; if optimizing typical prediction quality is the priority, choose HistGradientBoosting.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{outputs/figures/model_comparison.png}
+\caption{Model comparison across performance metrics}
+\label{fig:model_comparison}
+\end{figure}
+
+Figure \ref{fig:model_comparison} provides a visual comparison of the three key performance metrics. The left panel shows Ridge with 1.6\% lower RMSE than HistGradientBoosting (0.0577 vs 0.0586 N). The center panel reverses the ranking, with HistGradientBoosting achieving 9\% lower MAE (0.0255 vs 0.0281 N). The right panel shows nearly identical R² values (0.9716 vs 0.9707), with Ridge maintaining a marginal 0.1\% advantage. The error bars (95\% confidence intervals estimated by bootstrapping) overlap for all metrics, indicating the differences are statistically small but consistent across multiple evaluation runs.
+
+\subsection{Key Observations}
+
+\begin{enumerate}
+    \item \textbf{Both models achieve $R^2 > 0.97$} on unseen test thrusters (SN13-24)
+    \item \textbf{Ridge has lower RMSE} (0.0577 vs 0.0585 N, difference of 1.4\%) and trains 5.8× faster
+    \item \textbf{HistGradientBoosting has lower MAE} (0.0257 vs 0.0281 N), indicating better median predictions
+    \item \textbf{Feature reduction from 24 to 18} achieved 18.9× Ridge training speedup (13.6 min $\rightarrow$ 43 sec) with no accuracy loss
+    \item \textbf{Models generalize well} from training thrusters (SN01-12) to unseen test thrusters (SN13-24)
+    \item \textbf{BIC-optimal feature selection} eliminates redundancy while preserving predictive accuracy
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{outputs/figures/per_thruster_comparison.png}
+\caption{Per-thruster performance comparison between Ridge and HistGradientBoosting}
+\label{fig:per_thruster_comparison}
+\end{figure}
+
+Figure \ref{fig:per_thruster_comparison} compares per-thruster performance for both models. The RMSE panel (left) shows Ridge achieving more consistent performance across units (standard deviation 0.011 N) compared to HistGradientBoosting (0.015 N), with the most noticeable difference for SN20 where Ridge (0.057 N) substantially outperforms HistGradientBoosting (0.080 N). The MAE panel (center) demonstrates HistGradientBoosting's advantage across most thrusters, with 9 out of 12 units showing lower MAE than Ridge. The R² panel (right) reveals that Ridge maintains $R^2 > 0.97$ for all units, while HistGradientBoosting drops below this threshold for SN20 (0.943) and SN23 (0.960). This analysis suggests Ridge provides more robust generalization across diverse thruster behaviors, while HistGradientBoosting excels on typical units but struggles with outliers.
+
+\subsection{Why Does Ridge Outperform?}
+
+The slight superiority of Ridge (despite being simpler) can be explained by:
+\begin{itemize}
+    \item The relationship between consecutive thrust measurements is approximately linear
+    \item BIC-optimal feature selection eliminated redundant features, reducing noise
+    \item Feature engineering already captured non-linear patterns (rolling statistics)
+    \item Moderate regularization ($\alpha$ = 2.0) provides appropriate coefficient shrinkage for the 18-feature set
+    \item No strong interaction effects that tree-based models excel at capturing
+    \item Ridge provides more robust extrapolation for unit-specific dynamics (e.g., SN20)
+\end{itemize}
+
+%===============================================================================
+% CONCLUSIONS
+%===============================================================================
+\newpage
+\section{Conclusions}
+
+\subsection{Midterm 1 Summary}
+
+\begin{itemize}
+    \item Processed 2,611 test sequences with 167 million measurements
+    \item Confirmed performance degradation of 20-30\% over thruster lifetime
+    \item Identified inlet pressure as the dominant predictor (r = 0.68)
+    \item Detected but preserved outliers for modeling phase decision
+\end{itemize}
+
+\subsection{Midterm 2 Summary}
+
+\begin{itemize}
+    \item Engineered 24 candidate features and optimized to 18 via backward elimination with BIC criterion
+    \item Eliminated 6 redundant features: thrust[t-1], ton[t-1,t-2,t-4], cumulated\_throughput, time\_progress
+    \item Validated feature selection — BIC-optimal 18-feature subset achieved best parsimony-accuracy trade-off
+    \item Trained Ridge and HistGradientBoosting on 81 million samples with 18 features
+    \item Achieved R² $>$ 0.97 on 86 million test samples (unseen thrusters SN13-24)
+    \item Ridge achieved best RMSE (0.0577 N) and fastest training (43 sec)
+    \item HistGradientBoosting achieved best MAE (0.0257 N)
+    \item Hyperparameter tuning identified optimal parameters: Ridge ($\alpha$=2.0, solver=cholesky), HGB (lr=0.15, iter=150, l2=0.1)
+\end{itemize}
+
+\newpage
+\section*{References}
+
+\begin{enumerate}
+    \item STFT Dataset Documentation. Synthetic Spacecraft Thruster Firing Test Dataset.
+    \url{https://www.kaggle.com/datasets/patrickfleith/spacecraft-thruster-firing-tests-dataset?select=STFT+Dataset+Description.pdf}
+    \item IS.M.PIS21.1 Fall 2021. Software Engineering Project Guideline.
+    \item Scikit. Ensembles: Gradient boosting, random forests, bagging, voting, stacking.
+    \url{https://scikit-learn.org/stable/modules/ensemble.html#gradientboostingclassifier-and-gradientboostingregressor}
+    \item Wikipedia. Ridge regression.
+    \url{https://en.wikipedia.org/wiki/Ridge_regression}
+    \item IBM. What is Ridge regression?
+    \url{https://www.ibm.com/topics/ridge-regression}
+\end{enumerate}
+
+\end{document}

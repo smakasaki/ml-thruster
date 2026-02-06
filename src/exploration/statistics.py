@@ -5,7 +5,7 @@ from loguru import logger
 
 
 class StatisticsAnalyzer:
-    EXCLUDED_COLUMNS = ["uid"]
+    EXCLUDED_COLUMNS = ["uid", "filename"]
     SEPARATOR_WIDTH = 80
     CORRELATION_METHOD = "pearson"
 
@@ -17,7 +17,7 @@ class StatisticsAnalyzer:
         self, df: pd.DataFrame, split_name: str | None = None
     ) -> pd.DataFrame:
         if split_name:
-            df = df[df["split"] == split_name].copy()  # type: ignore[assignment]
+            df = df[df["split"] == split_name].copy()
 
         numeric_cols = self._get_numeric_columns(df)
 
@@ -40,7 +40,56 @@ class StatisticsAnalyzer:
         logger.info("Computing correlation matrix")
         numeric_cols = self._get_numeric_columns(df)
         numeric_df = df[numeric_cols]
-        return numeric_df.corr(method=self.CORRELATION_METHOD)  # type: ignore[call-arg]
+        return numeric_df.corr(method=self.CORRELATION_METHOD)
+
+    def compute_target_correlations(self, df: pd.DataFrame) -> pd.DataFrame:
+        logger.info("Computing target correlations")
+
+        targets = ["thrust_mean", "mfr_mean"]
+        existing_targets = [t for t in targets if t in df.columns]
+
+        if len(existing_targets) == 0:
+            logger.warning("No target columns found")
+            return pd.DataFrame()
+
+        numeric_cols = self._get_numeric_columns(df)
+        feature_cols = [col for col in numeric_cols if col not in targets]
+
+        if len(feature_cols) == 0:
+            logger.warning("No feature columns found")
+            return pd.DataFrame()
+
+        correlations = {}
+        for target in existing_targets:
+            target_corrs = []
+            for feature in feature_cols:
+                corr_value = df[feature].corr(df[target])
+                target_corrs.append(corr_value)
+            correlations[target] = target_corrs
+
+        corr_df = pd.DataFrame(correlations, index=feature_cols)
+        corr_df = corr_df.reindex(
+            corr_df[existing_targets[0]].abs().sort_values(ascending=False).index
+        )
+
+        return corr_df
+
+    def analyze_data_quality(self, df: pd.DataFrame) -> dict:
+        logger.info("Analyzing data quality")
+
+        quality_report = {
+            "total_records": len(df),
+            "missing_values": df.isna().sum().to_dict(),
+            "duplicate_rows": df.duplicated().sum(),
+        }
+
+        if "thrust_mean" in df.columns:
+            quality_report["negative_thrust_count"] = (df["thrust_mean"] < 0).sum()
+
+        if "mfr_mean" in df.columns:
+            quality_report["negative_mfr_count"] = (df["mfr_mean"] < 0).sum()
+
+        return quality_report
 
     def _format_statistics_report(self, df: pd.DataFrame) -> str:
         separator = "=" * self.SEPARATOR_WIDTH
@@ -58,11 +107,27 @@ class StatisticsAnalyzer:
         report.append(f"Test records: {(df['split'] == 'test').sum()}")
         report.append("")
 
+        quality = self.analyze_data_quality(df)
+        report.append("Data Quality:")
+        report.append(f"Duplicate rows: {quality['duplicate_rows']}")
+        if "negative_thrust_count" in quality:
+            report.append(f"Records with negative thrust: {quality['negative_thrust_count']}")
+        if "negative_mfr_count" in quality:
+            report.append(f"Records with negative MFR: {quality['negative_mfr_count']}")
+        report.append("")
+
         for split_name in ["train", "test"]:
             stats = self.compute_summary_statistics(df, split_name)
             report.append(f"\n{split_name.upper()} SPLIT STATISTICS:")
             report.append(subseparator)
             report.append(stats.to_string())
+            report.append("")
+
+        target_corrs = self.compute_target_correlations(df)
+        if not target_corrs.empty:
+            report.append("\nTOP CORRELATIONS WITH TARGETS:")
+            report.append(subseparator)
+            report.append(target_corrs.head(15).to_string())
             report.append("")
 
         return "\n".join(report)
@@ -87,4 +152,9 @@ class StatisticsAnalyzer:
 
         corr = self.compute_correlation_matrix(df)
         corr.to_csv(output_dir / "correlation_matrix.csv")
-        logger.info("Saved 3 statistics tables and correlation matrix")
+
+        target_corrs = self.compute_target_correlations(df)
+        if not target_corrs.empty:
+            target_corrs.to_csv(output_dir / "target_correlations.csv")
+
+        logger.info("Saved statistics tables")

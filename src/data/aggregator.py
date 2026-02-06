@@ -2,6 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -36,6 +37,10 @@ class TimeSeriesAggregates:
     pulses_count: int
     duration: float
     anomaly_duration: float
+    avg_pulse_duration: float
+    max_pulse_duration: float
+    min_pulse_duration: float
+    duty_cycle: float
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +58,10 @@ class TimeSeriesAggregates:
             "pulses_count": self.pulses_count,
             "duration": self.duration,
             "anomaly_duration": self.anomaly_duration,
+            "avg_pulse_duration": self.avg_pulse_duration,
+            "max_pulse_duration": self.max_pulse_duration,
+            "min_pulse_duration": self.min_pulse_duration,
+            "duty_cycle": self.duty_cycle,
         }
 
 
@@ -64,31 +73,37 @@ class DataAggregator:
             logger.warning("Empty DataFrame - returning default aggregates")
             return self._get_default_aggregates()
 
-        aggregates.update(
-            self._aggregate_column_statistics(
-                time_series_df, THRUST_COLUMN, self._get_default_column_aggregates
-            )
-        )
-        aggregates.update(
-            self._aggregate_column_statistics(
-                time_series_df, MFR_COLUMN, self._get_default_column_aggregates
-            )
-        )
+        if TON_COLUMN not in time_series_df.columns:
+            logger.warning("No ton column found - cannot filter active periods")
+            return self._get_default_aggregates()
 
-        if TON_COLUMN in time_series_df.columns:
-            is_thruster_active = time_series_df[TON_COLUMN] == 1
-            thruster_on_rows = time_series_df[is_thruster_active]
-            has_active_thrust_data = len(thruster_on_rows) > 0
-            aggregates["on_time_test"] = (
-                len(thruster_on_rows) / config.SAMPLING_RATE_HZ
-                if has_active_thrust_data
-                else DEFAULT_FLOAT_VALUE
+        active_mask = time_series_df[TON_COLUMN] == 1
+        active_df = time_series_df[active_mask]
+
+        if len(active_df) > 0:
+            aggregates.update(
+                self._aggregate_column_statistics(
+                    active_df, THRUST_COLUMN, self._get_default_column_aggregates
+                )
             )
-            ton_series = cast(pd.Series, time_series_df[TON_COLUMN])
-            aggregates["pulses_count"] = self._count_pulses(ton_series)
+            aggregates.update(
+                self._aggregate_column_statistics(
+                    active_df, MFR_COLUMN, self._get_default_column_aggregates
+                )
+            )
+
+            aggregates["on_time_test"] = len(active_df) / config.SAMPLING_RATE_HZ
         else:
+            logger.debug("No active periods (ton=1) found in sequence")
+            aggregates.update(self._get_default_column_aggregates("thrust"))
+            aggregates.update(self._get_default_column_aggregates("mfr"))
             aggregates["on_time_test"] = DEFAULT_FLOAT_VALUE
-            aggregates["pulses_count"] = DEFAULT_INT_VALUE
+
+        ton_series = cast(pd.Series, time_series_df[TON_COLUMN])
+        aggregates["pulses_count"] = self._count_pulses(ton_series)
+
+        ton_features = self._extract_ton_features(ton_series, config.SAMPLING_RATE_HZ)
+        aggregates.update(ton_features)
 
         if TIMESTAMP_COLUMN in time_series_df.columns and len(time_series_df) > 0:
             aggregates["duration"] = (
@@ -128,23 +143,74 @@ class DataAggregator:
         }
 
     def _get_default_column_aggregates(self, column_prefix: str) -> dict:
-        return {f"{column_prefix}_{suffix}": DEFAULT_FLOAT_VALUE for suffix in STATS_SUFFIXES}
+        return {f"{column_prefix}_{suffix}": np.nan for suffix in STATS_SUFFIXES}
 
     def _get_default_aggregates(self) -> dict:
         aggregates = {}
         aggregates.update(self._get_default_column_aggregates("thrust"))
         aggregates.update(self._get_default_column_aggregates("mfr"))
-        aggregates["on_time_test"] = DEFAULT_FLOAT_VALUE
-        aggregates["pulses_count"] = DEFAULT_INT_VALUE
-        aggregates["duration"] = DEFAULT_FLOAT_VALUE
-        aggregates["anomaly_duration"] = DEFAULT_FLOAT_VALUE
+        aggregates["on_time_test"] = np.nan  # ← CHANGED
+        aggregates["pulses_count"] = 0  # Keep as 0 (count can be zero)
+        aggregates["duration"] = np.nan  # ← CHANGED
+        aggregates["anomaly_duration"] = np.nan  # ← CHANGED
+        aggregates["avg_pulse_duration"] = np.nan  # ← CHANGED
+        aggregates["max_pulse_duration"] = np.nan  # ← CHANGED
+        aggregates["min_pulse_duration"] = np.nan  # ← CHANGED
+        aggregates["duty_cycle"] = np.nan  # ← CHANGED
         return aggregates
 
     def _count_pulses(self, ton_series: pd.Series) -> int:
-        """Counts rising edges (0→1 transitions) in the thruster on/off signal to determine pulse count."""
         state_changes = ton_series.diff()
         rising_edges = (state_changes == 1).sum()
         return int(rising_edges)
+
+    def _extract_ton_features(self, ton_series: pd.Series, sampling_rate: float) -> dict:
+        if len(ton_series) == 0:
+            return {
+                "avg_pulse_duration": np.nan,
+                "max_pulse_duration": np.nan,
+                "min_pulse_duration": np.nan,
+                "duty_cycle": np.nan,
+            }
+
+        duty_cycle = (ton_series == 1).mean()
+
+        state_changes = ton_series.diff()
+        rising_edges_mask = state_changes == 1
+        falling_edges_mask = state_changes == -1
+
+        rising_edges = ton_series.index[rising_edges_mask].tolist()
+        falling_edges = ton_series.index[falling_edges_mask].tolist()
+
+        if len(ton_series) > 0 and ton_series.iloc[0] == 1:
+            rising_edges.insert(0, ton_series.index[0])
+
+        if len(ton_series) > 0 and ton_series.iloc[-1] == 1:
+            falling_edges.append(ton_series.index[-1])
+
+        pulse_durations = []
+        min_length = min(len(rising_edges), len(falling_edges))
+        for i in range(min_length):
+            start = rising_edges[i]
+            end = falling_edges[i]
+            if end > start:
+                duration_seconds = (end - start) / sampling_rate
+                pulse_durations.append(duration_seconds)
+
+        if len(pulse_durations) == 0:
+            return {
+                "avg_pulse_duration": np.nan,
+                "max_pulse_duration": np.nan,
+                "min_pulse_duration": np.nan,
+                "duty_cycle": duty_cycle,  # Keep as-is
+            }
+
+        return {
+            "avg_pulse_duration": float(np.mean(pulse_durations)),
+            "max_pulse_duration": float(np.max(pulse_durations)),
+            "min_pulse_duration": float(np.min(pulse_durations)),
+            "duty_cycle": duty_cycle,
+        }
 
     def create_aggregated_dataset(
         self, metadata: pd.DataFrame, time_series_aggregates: list[dict]
