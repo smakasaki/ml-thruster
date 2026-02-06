@@ -1,146 +1,83 @@
 # Spacecraft Thruster ML
 
-TODO
+ML pipeline for spacecraft thruster thrust prediction using time series data with exogenous inputs.
+
+**Task:** Predict thrust[t] given ton[t] and historical data.
 
 ## Project Structure
 
 ```
 thruster/
 ├── data/
-│   ├── dataset/
-│   │   ├── metadata.csv    # Dataset metadata
-│   │   ├── train/          # Training data (SN01-SN12)
-│   │   └── test/           # Test data (SN13-SN15)
-│   ├── samples/
-│   │   ├── metadata.csv    # Sample metadata
-│   │   ├── train/          # Sample training files for reference
-│   │   └── test/           # Sample test files for reference
-│   ├──
-├── pyproject.toml          # Configuration file
-└── .pre-commit-config.yaml # Pre-commit hooks
-...
+│   ├── dataset/          # Full dataset (SN01-SN24)
+│   └── samples/          # Sample files for testing
+├── src/
+│   ├── data/             # Loading, cleaning, aggregation
+│   ├── exploration/      # Statistics, visualizations
+│   ├── modeling/         # Feature selection, models, evaluation
+│   └── scripts/          # Pipeline entry points
+└── outputs/              # Results, figures, models
 ```
 
-## Dataset
+## Midterm 1: Data Pipeline
 
-TODO
+Data collection, cleaning, and exploratory analysis.
 
-## Setup
-
-### Prerequisites
-
-- Python 3.11+
-
-### Installation
-
-1. Clone the repository.
-
-2. Create virtual environment:
-```bash
-python -m venv venv
-```
-
-3. Activate virtual environment:
-
-**Windows (PowerShell):**
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-
-**Windows (CMD):**
-```cmd
-venv\Scripts\activate.bat
-```
-
-**Linux/macOS:**
-```bash
-source venv/bin/activate
-```
-
-4. Install dependencies:
-```bash
-pip install -e .
-```
-
-Or install with dev tools:
-```bash
-pip install -e ".[dev]"
-```
-
-## Usage
-
-Run full pipeline:
+**Run:**
 ```bash
 python -m src.scripts.first_midterm
 ```
 
-Run with options:
+**Features:**
+- Load and validate metadata + time series CSV files
+- Clean data: handle missing values, outliers, duplicates
+- Aggregate time series into statistical features
+- Generate descriptive statistics and visualizations
+
+**Options:** `--log-file`, `--save-cleaned-csv`, `--interactive`
+
+## Midterm 2: Modeling
+
+Feature selection and model comparison for thrust prediction.
+
+**Run:**
 ```bash
-python -m src.scripts.first_midterm --log-file --save-cleaned-csv
+python -m src.scripts.second_midterm
 ```
 
-Run interactive menu:
+**Pipeline:**
+1. **Feature Engineering:** Lag features from time series
+2. **Feature Selection:** SelectKBest, PCA comparison
+3. **Models:** Ridge Regression, Random Forest, HistGradientBoosting
+4. **Evaluation:** MAE, RMSE, R² on test set (SN13-24)
+
+**Examples:**
 ```bash
-python -m src.scripts.first_midterm --interactive
+# Quick test with feature selection
+python -m src.scripts.second_midterm --max-files 50 --feature-selection
+
+# Save processed data to cache (slow first time)
+python -m src.scripts.second_midterm --save-cache --models ridge --skip-viz
+
+# Fast runs from cache
+python -m src.scripts.second_midterm --use-cache --feature-selection
 ```
 
-### Command-line Arguments
+## Setup
 
-- `--log-file` - Enable logging to file (outputs/pipeline.log)
-- `--save-cleaned-csv` - Save individual cleaned CSV files
-- `--interactive` - Launch interactive menu
+**Requirements:** Python 3.11+
 
-### Interactive Menu
-
-**[1] Run Full Pipeline** - Complete workflow: load, clean, aggregate, statistics, visualizations
-
-**[2] Load and Clean Data** - Process metadata and time series files
-
-**[3] Generate Statistics** - Create statistical reports and tables
-
-**[4] Create Visualizations** - Generate all plots and figures
-
-**[5] Run Statistics + Visualizations** - Execute options 3 and 4
-
-**[0] Exit** - Close the application
-
-## Development
-
-Install dev dependencies:
 ```bash
+python -m venv venv
+.\venv\Scripts\Activate.ps1  # Windows PowerShell
 pip install -e ".[dev]"
 ```
 
-### Pre-commit Hooks
+## Development
 
-Install pre-commit hooks:
 ```bash
-pre-commit install
-```
-
-Run hooks manually:
-```bash
-pre-commit run --all-files
-```
-
-Update hooks to latest versions:
-```bash
-pre-commit autoupdate
-```
-
-### Manual Checks
-
-Run linter:
-```bash
-ruff check .
-```
-
-Format code:
-```bash
-ruff format .
-```
-
-Type checking:
-```bash
-pyright
+pre-commit install    # Setup hooks
+ruff check .          # Lint
+ruff format .         # Format
+pyright               # Type check
 ```
